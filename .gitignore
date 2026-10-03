@@ -1,0 +1,23 @@
+# Weather Forecast App
+
+A free, static weather forecast app built with React and Vite.
+
+## Stack
+- React
+- Vite
+- Open-Meteo
+- Nominatim
+
+## Local run
+```bash
+npm install
+npm run dev
+```
+
+## Build
+```bash
+npm run build
+```
+
+## Deploy
+This project is ready to deploy to GitHub Pages using the included workflow.
