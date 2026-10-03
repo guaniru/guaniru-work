@@ -1,0 +1,238 @@
+/* global styles */
+:root {
+  --bg: #f4f7fb;
+  --panel: #ffffff;
+  --panel-alt: #eef5ff;
+  --primary: #2f6fed;
+  --primary-soft: #dfeaff;
+  --text: #1d2433;
+  --muted: #60708a;
+  --border: rgba(25, 39, 61, 0.12);
+  --shadow: rgba(21, 38, 67, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  min-height: 100%;
+  font-family: 'Segoe UI', 'Hiragino Sans', sans-serif;
+  background: linear-gradient(180deg, #eef5ff 0%, #f8fbff 100%);
+  color: var(--text);
+}
+
+button, input {
+  font: inherit;
+}
+
+.page-shell {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 32px 20px;
+}
+
+.container {
+  width: min(100%, 980px);
+}
+
+.topbar {
+  margin-bottom: 18px;
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  color: var(--primary);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3rem);
+}
+
+.search-bar {
+  display: flex;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 12px 14px;
+  box-shadow: 0 8px 25px var(--shadow);
+  margin-bottom: 18px;
+}
+
+.search-bar input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 1rem;
+  outline: none;
+}
+
+.search-bar button {
+  border: none;
+  background: var(--primary);
+  color: white;
+  padding: 12px 18px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.search-bar button:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.location-row {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 20px var(--shadow);
+  border-radius: 18px;
+  padding: 14px 18px;
+  margin-bottom: 18px;
+  font-weight: 700;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.weather-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: 0 10px 24px var(--shadow);
+  padding: 20px;
+}
+
+.weather-card.highlight {
+  background: linear-gradient(135deg, #dfeaff 0%, #f7faff 100%);
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+  font-weight: 700;
+}
+
+.badge {
+  background: var(--primary-soft);
+  color: var(--primary);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.72rem;
+}
+
+.temp-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.temp-row strong {
+  font-size: clamp(2rem, 5vw, 2.7rem);
+}
+
+.temp-row.small strong {
+  font-size: 1.8rem;
+}
+
+.stats-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.week-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: 0 10px 24px var(--shadow);
+  padding: 20px;
+}
+
+.week-panel h2 {
+  margin-top: 0;
+  margin-bottom: 16px;
+}
+
+.days-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.day-card {
+  border-radius: 16px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  padding: 14px 12px;
+}
+
+.day-name {
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.day-weather {
+  font-size: 0.95rem;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.day-temp {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.day-temp .low {
+  color: var(--muted);
+}
+
+.rain {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.error-box {
+  background: #fff3f3;
+  border: 1px solid #f4b8b8;
+  color: #9b1c1c;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+}
+
+@media (max-width: 720px) {
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .search-bar {
+    flex-direction: column;
+  }
+
+  .search-bar button {
+    width: 100%;
+  }
+}
