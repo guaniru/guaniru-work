@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 
 const STORAGE_KEY = 'weather-aggregator-cache-v1';
-const CACHE_MS = 1000 * 60 * 30; // 30分キャッシュ
+const RECENT_KEY = 'weather-recent-cities-v1';
+const CACHE_MS = 1000 * 60 * 30;
 
 function normalizeWeatherCode(code) {
   const map = {
@@ -52,6 +53,22 @@ function voteWeather(labels) {
   return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || '不明';
 }
 
+function getWeatherAdvice(temp, rainChance, weatherLabel) {
+  if (temp >= 30) {
+    return { outfit: '薄着で快適', umbrella: '日差しが強いので日焼け対策', accent: '熱中症対策' };
+  }
+  if (temp >= 22) {
+    return { outfit: '半袖が快適', umbrella: rainChance > 50 ? '傘があると安心' : '晴れが多い', accent: '過ごしやすい' };
+  }
+  if (temp >= 15) {
+    return { outfit: '長袖がちょうど良い', umbrella: rainChance > 50 ? '雨具を準備' : '風が冷たいので軽い羽織り', accent: '過ごしやすい' };
+  }
+  if (temp >= 8) {
+    return { outfit: '上着が必要', umbrella: weatherLabel.includes('雨') || rainChance > 50 ? '雨具を持って出かける' : '空気が冷えやすい', accent: '朝晩は冷えます' };
+  }
+  return { outfit: '厚手の服装', umbrella: weatherLabel.includes('雪') || weatherLabel.includes('雨') ? '防寒と雨対策' : '防寒に注意', accent: '寒さが強い' };
+}
+
 async function geocodeLocation(query) {
   const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(query)}`;
   const response = await fetch(url, { headers: { 'Accept-Language': 'ja' } });
@@ -66,6 +83,14 @@ async function geocodeLocation(query) {
   };
 }
 
+async function reverseGeocodeLocation(lat, lon) {
+  const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2&accept-language=ja`;
+  const response = await fetch(url, { headers: { 'Accept-Language': 'ja' } });
+  if (!response.ok) throw new Error('現在地を取得できませんでした。');
+  const data = await response.json();
+  return data?.address?.city || data?.address?.town || data?.address?.village || '現在地';
+}
+
 async function fetchWeatherFromOpenMeteo(lat, lon) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto`;
   const response = await fetch(url);
@@ -78,6 +103,7 @@ async function fetchWeatherFromOpenMeteo(lat, lon) {
     feelsLike: data.current?.apparent_temperature ?? 0,
     windSpeed: data.current?.wind_speed_10m ?? 0,
     weather: normalizeWeatherCode(data.current?.weather_code),
+    precipitationProbability: data.daily?.precipitation_probability_max?.[0] ?? 0,
     source: 'Open-Meteo'
   };
 
@@ -96,32 +122,17 @@ async function fetchWeatherFromOpenMeteo(lat, lon) {
 function buildAggregatedForecast(sources) {
   if (!sources.length) return null;
 
-  // 各ソースの天気予報をそのまま保持
-  const weatherSources = sources.map(s => ({
-    ...s,
-    current: {
-      ...s.current,
-      temp: average([s.current.temp]),
-      humidity: average([s.current.humidity]),
-      feelsLike: average([s.current.feelsLike]),
-      windSpeed: average([s.current.windSpeed])
-    }
-  }));
-
-  // 多数決で天気を決定
-  const currentWeatherVotes = weatherSources.map((item) => item.current.weather);
-  const aggregatedCurrentWeather = voteWeather(currentWeatherVotes);
-
   const current = {
     temp: average(sources.map((item) => item.current.temp)),
     humidity: average(sources.map((item) => item.current.humidity)),
     feelsLike: average(sources.map((item) => item.current.feelsLike)),
     windSpeed: average(sources.map((item) => item.current.windSpeed)),
-    weather: aggregatedCurrentWeather,
-    sources: weatherSources.map(s => ({
-      source: s.current.source,
-      weather: s.current.weather,
-      temp: s.current.temp
+    precipitationProbability: average(sources.map((item) => item.current.precipitationProbability)),
+    weather: voteWeather(sources.map((item) => item.current.weather)),
+    sources: sources.map((item) => ({
+      source: item.current.source,
+      weather: item.current.weather,
+      temp: item.current.temp
     }))
   };
 
@@ -135,18 +146,15 @@ function buildAggregatedForecast(sources) {
 
     if (!dayEntries.length) continue;
 
-    const dayWeatherVotes = dayEntries.map((entry) => entry.weather);
-    const aggregatedDayWeather = voteWeather(dayWeatherVotes);
-
     daily.push({
       date: dayEntries[0].date,
       maxTemp: average(dayEntries.map((entry) => entry.maxTemp)),
       minTemp: average(dayEntries.map((entry) => entry.minTemp)),
       precipitationProbability: average(dayEntries.map((entry) => entry.precipitationProbability)),
-      weather: aggregatedDayWeather,
-      sources: dayEntries.map(e => ({
-        source: e.source,
-        weather: e.weather
+      weather: voteWeather(dayEntries.map((entry) => entry.weather)),
+      sources: dayEntries.map((entry) => ({
+        source: entry.source,
+        weather: entry.weather
       }))
     });
   }
@@ -168,9 +176,20 @@ function App() {
   const [forecast, setForecast] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [recentCities, setRecentCities] = useState([]);
+  const [isLocating, setIsLocating] = useState(false);
 
   const today = useMemo(() => forecast?.daily?.[0], [forecast]);
   const tomorrow = useMemo(() => forecast?.daily?.[1], [forecast]);
+
+  const advice = useMemo(() => {
+    if (!forecast) return null;
+    return getWeatherAdvice(
+      forecast.current.temp,
+      forecast.current.precipitationProbability,
+      forecast.current.weather
+    );
+  }, [forecast]);
 
   useEffect(() => {
     const cached = localStorage.getItem(STORAGE_KEY);
@@ -187,20 +206,41 @@ function App() {
       }
     }
 
+    const savedCities = localStorage.getItem(RECENT_KEY);
+    if (savedCities) {
+      try {
+        const parsed = JSON.parse(savedCities);
+        if (Array.isArray(parsed)) setRecentCities(parsed);
+      } catch {
+        // ignore
+      }
+    }
+
     loadWeather('東京');
   }, []);
 
+  function saveRecentCity(cityName) {
+    const cleaned = cityName.trim();
+    if (!cleaned) return;
+    setRecentCities((prev) => {
+      const next = [cleaned, ...prev.filter((item) => item !== cleaned)].slice(0, 6);
+      localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
   async function loadWeather(city) {
+    const cityValue = city.trim() || '東京';
     setLoading(true);
     setError('');
 
     try {
-      const loc = await geocodeLocation(city);
+      const loc = await geocodeLocation(cityValue);
       const weather = await fetchWeatherFromOpenMeteo(loc.latitude, loc.longitude);
       const aggregated = buildAggregatedForecast([weather]);
 
       const payload = {
-        query: city,
+        query: cityValue,
         label: loc.label,
         forecast: aggregated,
         fetchedAt: Date.now()
@@ -209,6 +249,7 @@ function App() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
       setLabel(loc.label);
       setForecast(aggregated);
+      saveRecentCity(cityValue);
     } catch (err) {
       setError(err.message || '予報の取得に失敗しました。');
     } finally {
@@ -216,9 +257,53 @@ function App() {
     }
   }
 
+  async function useCurrentLocation() {
+    if (!navigator.geolocation) {
+      setError('この端末では現在地取得が対応していません。');
+      return;
+    }
+
+    setIsLocating(true);
+    setError('');
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const lat = position.coords.latitude;
+          const lon = position.coords.longitude;
+          const placeName = await reverseGeocodeLocation(lat, lon);
+          const weather = await fetchWeatherFromOpenMeteo(lat, lon);
+          const aggregated = buildAggregatedForecast([weather]);
+
+          const payload = {
+            query: placeName,
+            label: placeName,
+            forecast: aggregated,
+            fetchedAt: Date.now()
+          };
+
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+          setQuery(placeName);
+          setLabel(placeName);
+          setForecast(aggregated);
+          saveRecentCity(placeName);
+        } catch (err) {
+          setError(err.message || '現在地の天気を取得できませんでした。');
+        } finally {
+          setIsLocating(false);
+        }
+      },
+      () => {
+        setError('現在地の取得が拒否されました。');
+        setIsLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }
+
   const handleSubmit = (event) => {
     event.preventDefault();
-    loadWeather(query.trim() || '東京');
+    loadWeather(query);
   };
 
   return (
@@ -242,7 +327,46 @@ function App() {
           </button>
         </form>
 
+        <div className="utility-row">
+          <button type="button" className="utility-button" onClick={() => loadWeather(query || '東京')} disabled={loading}>
+            更新
+          </button>
+          <button type="button" className="utility-button soft" onClick={useCurrentLocation} disabled={isLocating}>
+            {isLocating ? '位置取得中...' : '現在地'}
+          </button>
+        </div>
+
+        {recentCities.length > 0 && (
+          <div className="quick-actions">
+            <span className="mini-label">最近検索</span>
+            <div className="chip-list">
+              {recentCities.map((city) => (
+                <button type="button" key={city} className="city-chip" onClick={() => { setQuery(city); loadWeather(city); }}>
+                  {city}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {error && <div className="error-box">{error}</div>}
+
+        {forecast && advice && (
+          <div className="summary-grid">
+            <div className="summary-card">
+              <span className="summary-label">服装</span>
+              <strong>{advice.outfit}</strong>
+            </div>
+            <div className="summary-card">
+              <span className="summary-label">傘</span>
+              <strong>{advice.umbrella}</strong>
+            </div>
+            <div className="summary-card accent">
+              <span className="summary-label">ポイント</span>
+              <strong>{advice.accent}</strong>
+            </div>
+          </div>
+        )}
 
         {forecast && (
           <>
@@ -264,6 +388,7 @@ function App() {
                   <li>体感: {Math.round(forecast.current.feelsLike)}°C</li>
                   <li>湿度: {Math.round(forecast.current.humidity)}%</li>
                   <li>風速: {Math.round(forecast.current.windSpeed)} km/h</li>
+                  <li>降水: {Math.round(forecast.current.precipitationProbability)}%</li>
                 </ul>
                 {forecast.current.sources && forecast.current.sources.length > 0 && (
                   <div className="sources-small">
