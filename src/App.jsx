@@ -103,7 +103,7 @@ async function reverseGeocodeLocation(lat, lon) {
 }
 
 async function fetchWeatherFromOpenMeteo(lat, lon) {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto`;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&hourly=temperature_2m,precipitation_probability,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto`;
   const response = await fetch(url);
   if (!response.ok) throw new Error('Open-Meteo: 天気データの取得に失敗しました。');
   const data = await response.json();
@@ -118,6 +118,13 @@ async function fetchWeatherFromOpenMeteo(lat, lon) {
     source: 'Open-Meteo'
   };
 
+  const hourly = (data.hourly?.time || []).slice(0, 24).map((time, index) => ({
+    time,
+    temp: data.hourly.temperature_2m?.[index] ?? 0,
+    precipitationProbability: data.hourly.precipitation_probability?.[index] ?? 0,
+    weather: normalizeWeatherCode(data.hourly.weather_code?.[index])
+  }));
+
   const daily = (data.daily?.time || []).map((date, index) => ({
     date,
     maxTemp: data.daily.temperature_2m_max?.[index] ?? 0,
@@ -127,7 +134,7 @@ async function fetchWeatherFromOpenMeteo(lat, lon) {
     source: 'Open-Meteo'
   }));
 
-  return { current, daily };
+  return { current, daily, hourly };
 }
 
 async function fetchWeatherFromWttr(city) {
@@ -142,6 +149,13 @@ async function fetchWeatherFromWttr(city) {
   if (!current) throw new Error('wttr.in: 現在の天気データがありません。');
 
   const weatherLabel = normalizeWeatherLabel(current.weatherDesc?.[0]?.value || '不明');
+
+  const hourly = (weather[0]?.hourly || []).slice(0, 24).map((item, index) => ({
+    time: `${weather[0].date}T${String(index).padStart(2, '0')}:00:00`,
+    temp: Number(item.tempC || 0),
+    precipitationProbability: Number(item.precipMM || 0),
+    weather: normalizeWeatherLabel(item.weatherDesc?.[0]?.value || '不明')
+  }));
 
   return {
     current: {
@@ -160,7 +174,8 @@ async function fetchWeatherFromWttr(city) {
       precipitationProbability: Number(day.precipMM || 0),
       weather: normalizeWeatherLabel(day.hourly?.[0]?.weatherDesc?.[0]?.value || day.hourly?.[1]?.weatherDesc?.[0]?.value || day.hourly?.[2]?.weatherDesc?.[0]?.value || '不明'),
       source: 'wttr.in'
-    }))
+    })),
+    hourly
   };
 }
 
@@ -178,6 +193,33 @@ async function fetchAllWeatherSources(city, lat, lon) {
   }
 
   return results;
+}
+
+function buildHourlyForecast(sources) {
+  const map = new Map();
+
+  sources.forEach((source) => {
+    (source.hourly || []).forEach((point) => {
+      if (!point?.time) return;
+      if (!map.has(point.time)) {
+        map.set(point.time, { temps: [], weather: [], precip: [] });
+      }
+      const bucket = map.get(point.time);
+      if (Number.isFinite(point.temp)) bucket.temps.push(point.temp);
+      if (point.weather) bucket.weather.push(point.weather);
+      if (Number.isFinite(point.precipitationProbability)) bucket.precip.push(point.precipitationProbability);
+    });
+  });
+
+  return Array.from(map.entries())
+    .map(([time, item]) => ({
+      time,
+      temp: average(item.temps),
+      weather: voteWeather(item.weather),
+      precipitationProbability: average(item.precip)
+    }))
+    .filter((entry) => entry.time)
+    .slice(0, 24);
 }
 
 function buildAggregatedForecast(sources) {
@@ -220,7 +262,11 @@ function buildAggregatedForecast(sources) {
     });
   }
 
-  return { current, daily };
+  return {
+    current,
+    daily,
+    hourly: buildHourlyForecast(sources)
+  };
 }
 
 function formatDateLabel(dateString) {
@@ -229,6 +275,11 @@ function formatDateLabel(dateString) {
   const day = date.getUTCDate();
   const week = ['日', '月', '火', '水', '木', '金', '土'];
   return `${month}/${day} (${week[date.getUTCDay()]})`;
+}
+
+function formatHourLabel(timeString) {
+  const date = new Date(timeString);
+  return `${date.getHours()}時`;
 }
 
 function App() {
@@ -500,6 +551,23 @@ function App() {
                   </div>
                 )}
               </article>
+            </section>
+
+            <section className="hourly-panel">
+              <div className="panel-header">
+                <span>1時間ごとの天気</span>
+                <span className="chip">24時間</span>
+              </div>
+              <div className="hourly-strip">
+                {forecast.hourly?.slice(0, 24).map((hour) => (
+                  <div className="hour-card" key={hour.time}>
+                    <span className="hour-time">{formatHourLabel(hour.time)}</span>
+                    <strong>{Math.round(hour.temp)}°</strong>
+                    <span className="hour-weather">{hour.weather}</span>
+                    <span className="hour-rain">降水 {Math.round(hour.precipitationProbability)}%</span>
+                  </div>
+                ))}
+              </div>
             </section>
 
             <section className="week-panel">
