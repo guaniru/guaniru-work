@@ -149,13 +149,18 @@ async function fetchWeatherFromWttr(city) {
   if (!current) throw new Error('wttr.in: 現在の天気データがありません。');
 
   const weatherLabel = normalizeWeatherLabel(current.weatherDesc?.[0]?.value || '不明');
+  const baseDate = new Date();
+  baseDate.setMinutes(0, 0, 0);
 
-  const hourly = (weather[0]?.hourly || []).slice(0, 24).map((item, index) => ({
-    time: `${weather[0].date}T${String(index).padStart(2, '0')}:00:00`,
-    temp: Number(item.tempC || 0),
-    precipitationProbability: Number(item.precipMM || 0),
-    weather: normalizeWeatherLabel(item.weatherDesc?.[0]?.value || '不明')
-  }));
+  const hourly = (weather[0]?.hourly || []).slice(0, 24).map((item, index) => {
+    const time = new Date(baseDate.getTime() + index * 60 * 60 * 1000).toISOString();
+    return {
+      time,
+      temp: Number(item.tempC || 0),
+      precipitationProbability: Number(item.precipMM || 0),
+      weather: normalizeWeatherLabel(item.weatherDesc?.[0]?.value || '不明')
+    };
+  });
 
   return {
     current: {
@@ -553,7 +558,7 @@ function App() {
               </article>
             </section>
 
-            <section className="hourly-panel">
+            <section className="hourly-panel panel">
               <div className="panel-header">
                 <span>1時間ごとの天気</span>
                 <span className="chip">24時間</span>
