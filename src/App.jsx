@@ -4,6 +4,17 @@ const STORAGE_KEY = 'weather-aggregator-cache-v1';
 const RECENT_KEY = 'weather-recent-cities-v1';
 const CACHE_MS = 1000 * 60 * 30;
 
+function normalizeWeatherLabel(label) {
+  const text = String(label || '').toLowerCase();
+  if (text.includes('sun') || text.includes('clear') || text.includes('晴')) return '晴れ';
+  if (text.includes('cloud') || text.includes('overcast') || text.includes('曇')) return '曇り';
+  if (text.includes('rain') || text.includes('shower') || text.includes('drizzle') || text.includes('雨')) return '雨';
+  if (text.includes('snow') || text.includes('ice') || text.includes('雪')) return '雪';
+  if (text.includes('fog') || text.includes('mist') || text.includes('霧')) return '霧';
+  if (text.includes('thunder') || text.includes('storm') || text.includes('雷')) return '雷雨';
+  return '不明';
+}
+
 function normalizeWeatherCode(code) {
   const map = {
     0: '晴れ',
@@ -36,35 +47,6 @@ function normalizeWeatherCode(code) {
     99: '雷雨'
   };
 
-  return map[code] || '不明';
-}
-
-function normalizeWeatherWMO(code) {
-  const map = {
-    0: '晴れ',
-    1: '晴れ',
-    2: '晴れ',
-    3: '曇り',
-    45: '霧',
-    48: '霧',
-    51: '霧雨',
-    53: '霧雨',
-    55: '霧雨',
-    61: '雨',
-    63: '雨',
-    65: '大雨',
-    71: '雪',
-    73: '雪',
-    75: '大雪',
-    80: 'にわか雨',
-    81: '大雨',
-    82: '大雨',
-    85: '雪',
-    86: '大雪',
-    95: '雷雨',
-    96: '雷雨',
-    99: '雷雨'
-  };
   return map[code] || '不明';
 }
 
@@ -148,104 +130,51 @@ async function fetchWeatherFromOpenMeteo(lat, lon) {
   return { current, daily };
 }
 
-async function fetchWeatherFromNOAA(lat, lon) {
-  try {
-    const pointsUrl = `https://api.weather.gov/points/${lat},${lon}`;
-    const pointsResp = await fetch(pointsUrl);
-    if (!pointsResp.ok) return null;
-    const pointsData = await pointsResp.json();
-    
-    const forecastUrl = pointsData.properties?.forecast;
-    if (!forecastUrl) return null;
-    
-    const forecastResp = await fetch(forecastUrl);
-    if (!forecastResp.ok) return null;
-    const forecastData = await forecastResp.json();
-    
-    const periods = forecastData.properties?.periods || [];
-    if (!periods.length) return null;
+async function fetchWeatherFromWttr(city) {
+  const url = `https://wttr.in/${encodeURIComponent(city)}?format=j1`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error('wttr.in: 天気データの取得に失敗しました。');
 
-    const current = {
-      temp: periods[0]?.temperature ?? 0,
-      humidity: 0,
-      feelsLike: 0,
-      windSpeed: parseInt(periods[0]?.windSpeed?.match(/\d+/)?.[0] || '0'),
-      weather: periods[0]?.shortForecast || '不明',
-      precipitationProbability: 0,
-      source: 'NOAA'
-    };
+  const data = await response.json();
+  const current = data?.current_condition?.[0];
+  const weather = data?.weather || [];
 
-    const daily = [];
-    for (let i = 0; i < Math.min(7, periods.length); i += 2) {
-      const day = periods[i];
-      const night = periods[i + 1];
-      if (!day) break;
-      
-      daily.push({
-        date: day.startTime?.split('T')?.[0] || new Date().toISOString().split('T')[0],
-        maxTemp: day.temperature ?? 0,
-        minTemp: night?.temperature ?? 0,
-        precipitationProbability: 0,
-        weather: day.shortForecast || '不明',
-        source: 'NOAA'
-      });
-    }
+  if (!current) throw new Error('wttr.in: 現在の天気データがありません。');
 
-    return { current, daily };
-  } catch (e) {
-    return null;
-  }
+  const weatherLabel = normalizeWeatherLabel(current.weatherDesc?.[0]?.value || '不明');
+
+  return {
+    current: {
+      temp: Number(current.temp_C || 0),
+      humidity: Number(current.humidity || 0),
+      feelsLike: Number(current.FeelsLikeC || 0),
+      windSpeed: Number(current.windspeedKmph || 0),
+      weather: weatherLabel,
+      precipitationProbability: Number(current.precipMM || 0),
+      source: 'wttr.in'
+    },
+    daily: weather.slice(0, 7).map((day) => ({
+      date: day.date,
+      maxTemp: Number(day.maxtempC || 0),
+      minTemp: Number(day.mintempC || 0),
+      precipitationProbability: Number(day.precipMM || 0),
+      weather: normalizeWeatherLabel(day.hourly?.[0]?.weatherDesc?.[0]?.value || day.hourly?.[1]?.weatherDesc?.[0]?.value || day.hourly?.[2]?.weatherDesc?.[0]?.value || '不明'),
+      source: 'wttr.in'
+    }))
+  };
 }
 
-async function fetchWeatherFromJMA(lat, lon) {
-  try {
-    const url = `https://www.jma.go.jp/bosai/forecast/data/overview_week/${Math.round(lat * 100) / 100},${Math.round(lon * 100) / 100}.json`;
-    const response = await fetch(url);
-    if (!response.ok) return null;
-    const data = await response.json();
-    
-    if (!data.forecasts || data.forecasts.length === 0) return null;
-
-    const firstForecast = data.forecasts[0];
-    const current = {
-      temp: 0,
-      humidity: 0,
-      feelsLike: 0,
-      windSpeed: 0,
-      weather: firstForecast.text?.split('\n')?.[0] || '不明',
-      precipitationProbability: 0,
-      source: '気象庁(JMA)'
-    };
-
-    const daily = data.forecasts.map((forecast, idx) => ({
-      date: forecast.date,
-      maxTemp: 0,
-      minTemp: 0,
-      precipitationProbability: 0,
-      weather: forecast.text?.split('\n')?.[0] || '不明',
-      source: '気象庁(JMA)'
-    }));
-
-    return { current, daily };
-  } catch (e) {
-    return null;
-  }
-}
-
-async function fetchAllWeatherSources(lat, lon) {
+async function fetchAllWeatherSources(city, lat, lon) {
   const results = [];
 
   const openMeteo = await fetchWeatherFromOpenMeteo(lat, lon).catch(() => null);
   if (openMeteo) results.push(openMeteo);
 
-  const noaa = await fetchWeatherFromNOAA(lat, lon).catch(() => null);
-  if (noaa) results.push(noaa);
-
-  const jma = await fetchWeatherFromJMA(lat, lon).catch(() => null);
-  if (jma) results.push(jma);
+  const wttr = await fetchWeatherFromWttr(city).catch(() => null);
+  if (wttr) results.push(wttr);
 
   if (results.length === 0) {
-    throw new Error('どの天気サービスからもデータを取得できませんでした。');
+    throw new Error('どの無料天気サービスからもデータを取得できませんでした。');
   }
 
   return results;
@@ -255,11 +184,11 @@ function buildAggregatedForecast(sources) {
   if (!sources.length) return null;
 
   const current = {
-    temp: average(sources.map((item) => item.current.temp).filter(t => t !== 0)),
-    humidity: average(sources.map((item) => item.current.humidity).filter(h => h !== 0)),
-    feelsLike: average(sources.map((item) => item.current.feelsLike).filter(f => f !== 0)),
-    windSpeed: average(sources.map((item) => item.current.windSpeed).filter(w => w !== 0)),
-    precipitationProbability: average(sources.map((item) => item.current.precipitationProbability).filter(p => p !== 0)),
+    temp: average(sources.map((item) => item.current.temp).filter((t) => t !== 0)),
+    humidity: average(sources.map((item) => item.current.humidity).filter((h) => h !== 0)),
+    feelsLike: average(sources.map((item) => item.current.feelsLike).filter((f) => f !== 0)),
+    windSpeed: average(sources.map((item) => item.current.windSpeed).filter((w) => w !== 0)),
+    precipitationProbability: average(sources.map((item) => item.current.precipitationProbability).filter((p) => p !== 0)),
     weather: voteWeather(sources.map((item) => item.current.weather)),
     sources: sources.map((item) => ({
       source: item.current.source,
@@ -280,9 +209,9 @@ function buildAggregatedForecast(sources) {
 
     daily.push({
       date: dayEntries[0].date,
-      maxTemp: average(dayEntries.map((entry) => entry.maxTemp).filter(t => t !== 0)),
-      minTemp: average(dayEntries.map((entry) => entry.minTemp).filter(t => t !== 0)),
-      precipitationProbability: average(dayEntries.map((entry) => entry.precipitationProbability).filter(p => p !== 0)),
+      maxTemp: average(dayEntries.map((entry) => entry.maxTemp).filter((t) => t !== 0)),
+      minTemp: average(dayEntries.map((entry) => entry.minTemp).filter((t) => t !== 0)),
+      precipitationProbability: average(dayEntries.map((entry) => entry.precipitationProbability).filter((p) => p !== 0)),
       weather: voteWeather(dayEntries.map((entry) => entry.weather)),
       sources: dayEntries.map((entry) => ({
         source: entry.source,
@@ -334,7 +263,7 @@ function App() {
           setForecast(parsed.forecast);
         }
       } catch {
-        // ignore cache parse errors
+        // ignore parse errors
       }
     }
 
@@ -344,7 +273,7 @@ function App() {
         const parsed = JSON.parse(savedCities);
         if (Array.isArray(parsed)) setRecentCities(parsed);
       } catch {
-        // ignore
+        // ignore parse errors
       }
     }
 
@@ -368,8 +297,8 @@ function App() {
 
     try {
       const loc = await geocodeLocation(cityValue);
-      const allWeatherSources = await fetchAllWeatherSources(loc.latitude, loc.longitude);
-      const aggregated = buildAggregatedForecast(allWeatherSources);
+      const sources = await fetchAllWeatherSources(cityValue, loc.latitude, loc.longitude);
+      const aggregated = buildAggregatedForecast(sources);
 
       const payload = {
         query: cityValue,
@@ -404,8 +333,8 @@ function App() {
           const lat = position.coords.latitude;
           const lon = position.coords.longitude;
           const placeName = await reverseGeocodeLocation(lat, lon);
-          const allWeatherSources = await fetchAllWeatherSources(lat, lon);
-          const aggregated = buildAggregatedForecast(allWeatherSources);
+          const sources = await fetchAllWeatherSources(placeName, lat, lon);
+          const aggregated = buildAggregatedForecast(sources);
 
           const payload = {
             query: placeName,
@@ -473,7 +402,15 @@ function App() {
             <span className="mini-label">最近検索</span>
             <div className="chip-list">
               {recentCities.map((city) => (
-                <button type="button" key={city} className="city-chip" onClick={() => { setQuery(city); loadWeather(city); }}>
+                <button
+                  type="button"
+                  key={city}
+                  className="city-chip"
+                  onClick={() => {
+                    setQuery(city);
+                    loadWeather(city);
+                  }}
+                >
                   {city}
                 </button>
               ))}
@@ -504,7 +441,7 @@ function App() {
           <>
             <section className="location-box">
               <span>📍 {label}</span>
-              <span className="source-count">{forecast.current.sources?.length || 0}つのサイトを統合</span>
+              <span className="source-count">{forecast.current.sources?.length || 0}つの無料ソースを統合</span>
             </section>
 
             <section className="cards">
@@ -576,7 +513,9 @@ function App() {
                       {day.maxTemp !== 0 && <span>{Math.round(day.maxTemp)}°</span>}
                       {day.minTemp !== 0 && <span className="low">{Math.round(day.minTemp)}°</span>}
                     </div>
-                    {day.precipitationProbability !== 0 && <div className="rain">降水 {Math.round(day.precipitationProbability)}%</div>}
+                    {day.precipitationProbability !== 0 && (
+                      <div className="rain">降水 {Math.round(day.precipitationProbability)}%</div>
+                    )}
                     {day.sources && day.sources.length > 0 && (
                       <div className="day-sources">
                         {day.sources.map((src, idx) => (
