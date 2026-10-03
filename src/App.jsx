@@ -67,7 +67,7 @@ async function geocodeLocation(query) {
 }
 
 async function fetchWeatherFromOpenMeteo(lat, lon) {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=7`;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto`;
   const response = await fetch(url);
   if (!response.ok) throw new Error('天気データの取得に失敗しました。');
   const data = await response.json();
@@ -77,7 +77,8 @@ async function fetchWeatherFromOpenMeteo(lat, lon) {
     humidity: data.current?.relative_humidity_2m ?? 0,
     feelsLike: data.current?.apparent_temperature ?? 0,
     windSpeed: data.current?.wind_speed_10m ?? 0,
-    weather: normalizeWeatherCode(data.current?.weather_code)
+    weather: normalizeWeatherCode(data.current?.weather_code),
+    source: 'Open-Meteo'
   };
 
   const daily = (data.daily?.time || []).map((date, index) => ({
@@ -85,7 +86,8 @@ async function fetchWeatherFromOpenMeteo(lat, lon) {
     maxTemp: data.daily.temperature_2m_max?.[index] ?? 0,
     minTemp: data.daily.temperature_2m_min?.[index] ?? 0,
     precipitationProbability: data.daily.precipitation_probability_max?.[index] ?? 0,
-    weather: normalizeWeatherCode(data.daily.weather_code?.[index])
+    weather: normalizeWeatherCode(data.daily.weather_code?.[index]),
+    source: 'Open-Meteo'
   }));
 
   return { current, daily };
@@ -94,12 +96,33 @@ async function fetchWeatherFromOpenMeteo(lat, lon) {
 function buildAggregatedForecast(sources) {
   if (!sources.length) return null;
 
+  // 各ソースの天気予報をそのまま保持
+  const weatherSources = sources.map(s => ({
+    ...s,
+    current: {
+      ...s.current,
+      temp: average([s.current.temp]),
+      humidity: average([s.current.humidity]),
+      feelsLike: average([s.current.feelsLike]),
+      windSpeed: average([s.current.windSpeed])
+    }
+  }));
+
+  // 多数決で天気を決定
+  const currentWeatherVotes = weatherSources.map((item) => item.current.weather);
+  const aggregatedCurrentWeather = voteWeather(currentWeatherVotes);
+
   const current = {
     temp: average(sources.map((item) => item.current.temp)),
     humidity: average(sources.map((item) => item.current.humidity)),
     feelsLike: average(sources.map((item) => item.current.feelsLike)),
     windSpeed: average(sources.map((item) => item.current.windSpeed)),
-    weather: voteWeather(sources.map((item) => item.current.weather))
+    weather: aggregatedCurrentWeather,
+    sources: weatherSources.map(s => ({
+      source: s.current.source,
+      weather: s.current.weather,
+      temp: s.current.temp
+    }))
   };
 
   const dayCount = Math.max(...sources.map((item) => item.daily.length));
@@ -112,12 +135,19 @@ function buildAggregatedForecast(sources) {
 
     if (!dayEntries.length) continue;
 
+    const dayWeatherVotes = dayEntries.map((entry) => entry.weather);
+    const aggregatedDayWeather = voteWeather(dayWeatherVotes);
+
     daily.push({
       date: dayEntries[0].date,
       maxTemp: average(dayEntries.map((entry) => entry.maxTemp)),
       minTemp: average(dayEntries.map((entry) => entry.minTemp)),
       precipitationProbability: average(dayEntries.map((entry) => entry.precipitationProbability)),
-      weather: voteWeather(dayEntries.map((entry) => entry.weather))
+      weather: aggregatedDayWeather,
+      sources: dayEntries.map(e => ({
+        source: e.source,
+        weather: e.weather
+      }))
     });
   }
 
@@ -235,6 +265,18 @@ function App() {
                   <li>湿度: {Math.round(forecast.current.humidity)}%</li>
                   <li>風速: {Math.round(forecast.current.windSpeed)} km/h</li>
                 </ul>
+                {forecast.current.sources && forecast.current.sources.length > 0 && (
+                  <div className="sources-small">
+                    <p className="sources-label">各ソース:</p>
+                    {forecast.current.sources.map((src, idx) => (
+                      <div key={idx} className="source-item">
+                        <span className="source-name">{src.source}</span>
+                        <span className="source-weather">{src.weather}</span>
+                        <span className="source-temp">{Math.round(src.temp)}°C</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </article>
 
               <article className="panel">
@@ -251,6 +293,17 @@ function App() {
                   <li>最低: {Math.round(tomorrow?.minTemp || 0)}°C</li>
                   <li>降水: {Math.round(tomorrow?.precipitationProbability || 0)}%</li>
                 </ul>
+                {tomorrow?.sources && tomorrow.sources.length > 0 && (
+                  <div className="sources-small">
+                    <p className="sources-label">各ソース:</p>
+                    {tomorrow.sources.map((src, idx) => (
+                      <div key={idx} className="source-item">
+                        <span className="source-name">{src.source}</span>
+                        <span className="source-weather">{src.weather}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </article>
             </section>
 
@@ -266,6 +319,15 @@ function App() {
                       <span className="low">{Math.round(day.minTemp)}°</span>
                     </div>
                     <div className="rain">降水 {Math.round(day.precipitationProbability)}%</div>
+                    {day.sources && day.sources.length > 0 && (
+                      <div className="day-sources">
+                        {day.sources.map((src, idx) => (
+                          <div key={idx} className="day-source-item">
+                            <span className="day-source-weather">{src.weather}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
